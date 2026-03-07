@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  repository_dispatch:
+    types:
+      - velodeck-release
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref or commit SHA to build"
+        required: true
+      tag:
+        description: "Release tag to publish (e.g., v0.9.1)"
+        required: true
+      source_repository:
+        description: "Private source repository (owner/name)"
+        required: false
+
+env:
+  DEFAULT_SOURCE_REPOSITORY: zoubingwu/velodeck
+
+jobs:
+  release:
+    name: Build and publish macOS release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            REF="${{ github.event.client_payload.ref }}"
+            TAG="${{ github.event.client_payload.tag }}"
+            VERSION="${{ github.event.client_payload.version }}"
+            COMMIT_SHA="${{ github.event.client_payload.commit_sha }}"
+            SOURCE_REPOSITORY="${{ github.event.client_payload.source_repository }}"
+          else
+            REF="${{ github.event.inputs.ref }}"
+            TAG="${{ github.event.inputs.tag }}"
+            VERSION="${TAG#v}"
+            COMMIT_SHA="${REF}"
+            SOURCE_REPOSITORY="${{ github.event.inputs.source_repository }}"
+          fi
+
+          if [ -z "${SOURCE_REPOSITORY}" ]; then
+            SOURCE_REPOSITORY="${{ vars.VELODECK_SOURCE_REPOSITORY || env.DEFAULT_SOURCE_REPOSITORY }}"
+          fi
+
+          if [ -z "${SOURCE_REPOSITORY}" ]; then
+            echo "VELODECK_SOURCE_REPOSITORY is empty"
+            exit 1
+          fi
+
+          VERSION="${VERSION#v}"
+          RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download"
+
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "source_repository=${SOURCE_REPOSITORY}" >> $GITHUB_OUTPUT
+          echo "release_base_url=${RELEASE_BASE_URL}" >> $GITHUB_OUTPUT
+
+      - name: Checkout source repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.release.outputs.source_repository }}
+          token: ${{ secrets.VELODECK_SOURCE_REPO_TOKEN }}
+          ref: ${{ steps.release.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Resolve checked out commit
+        id: source
+        shell: bash
+        run: |
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Print toolchain versions
+        shell: bash
+        run: |
+          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+          sw_vers
+          xcodebuild -version
+          clang --version | head -n 1
+          node -v
+          bun --version
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Electrobun app for macOS (stable)
+        env:
+          VELODECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_REPOSITORY: ${{ steps.release.outputs.source_repository }}
+          SOURCE_COMMIT_SHA: ${{ steps.source.outputs.commit_sha }}
+        shell: bash
+        run: |
+          echo "Building ${RELEASE_TAG} from ${SOURCE_REPOSITORY}@${SOURCE_COMMIT_SHA}"
+          bun run build:mac:stable
+
+      - name: Verify generated artifacts
+        shell: bash
+        run: |
+          if [ ! -d artifacts ]; then
+            echo "artifacts directory is missing"
+            exit 1
+          fi
+
+          if [ -z "$(find artifacts -maxdepth 1 -type f)" ]; then
+            echo "no release artifacts found in artifacts/"
+            exit 1
+          fi
+
+          echo "Generated artifacts:"
+          ls -la artifacts
+
+      - name: Ensure GitHub Release Exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          COMMIT_SHA="${{ steps.source.outputs.commit_sha }}"
+          SOURCE_REPOSITORY="${{ steps.release.outputs.source_repository }}"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          BODY_FILE="$(mktemp)"
+          cat <<EOF > "${BODY_FILE}"
+          Release artifacts for ${TAG}
+
+          Source repository: ${SOURCE_REPOSITORY}
+          Source commit: ${COMMIT_SHA}
+          EOF
+
+          gh release create "${TAG}" \
+            --title "Release ${TAG}" \
+            --notes-file "${BODY_FILE}"
+
+      - name: Upload Electrobun artifacts to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" artifacts/* --clobber
