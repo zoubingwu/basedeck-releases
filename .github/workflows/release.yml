@@ -136,8 +136,9 @@ jobs:
           TAG="${{ steps.release.outputs.tag }}"
           COMMIT_SHA="${{ steps.source.outputs.commit_sha }}"
           SOURCE_REPOSITORY="${{ steps.release.outputs.source_repository }}"
+          TARGET_REPOSITORY="${GITHUB_REPOSITORY}"
 
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${TAG}" --repo "${TARGET_REPOSITORY}" >/dev/null 2>&1; then
             exit 0
           fi
 
@@ -150,6 +151,7 @@ jobs:
           EOF
 
           gh release create "${TAG}" \
+            --repo "${TARGET_REPOSITORY}" \
             --title "Release ${TAG}" \
             --notes-file "${BODY_FILE}"
 
@@ -158,4 +160,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" artifacts/* --clobber
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
