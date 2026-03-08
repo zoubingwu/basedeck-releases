@@ -3,7 +3,7 @@ name: Release
 on:
   repository_dispatch:
     types:
-      - velodeck-release
+      - basedeck-release
   workflow_dispatch:
     inputs:
       ref:
@@ -17,7 +17,7 @@ on:
         required: false
 
 env:
-  DEFAULT_SOURCE_REPOSITORY: zoubingwu/velodeck
+  DEFAULT_SOURCE_REPOSITORY: zoubingwu/basedeck
 
 jobs:
   release:
@@ -46,11 +46,11 @@ jobs:
           fi
 
           if [ -z "${SOURCE_REPOSITORY}" ]; then
-            SOURCE_REPOSITORY="${{ vars.VELODECK_SOURCE_REPOSITORY || env.DEFAULT_SOURCE_REPOSITORY }}"
+            SOURCE_REPOSITORY="${{ vars.BASEDECK_SOURCE_REPOSITORY || env.DEFAULT_SOURCE_REPOSITORY }}"
           fi
 
           if [ -z "${SOURCE_REPOSITORY}" ]; then
-            echo "VELODECK_SOURCE_REPOSITORY is empty"
+            echo "BASEDECK_SOURCE_REPOSITORY is empty"
             exit 1
           fi
 
@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ steps.release.outputs.source_repository }}
-          token: ${{ secrets.VELODECK_SOURCE_REPO_TOKEN }}
+          token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
           ref: ${{ steps.release.outputs.ref }}
           fetch-depth: 0
 
@@ -103,7 +103,7 @@ jobs:
 
       - name: Build Electrobun app for macOS (stable)
         env:
-          VELODECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
+          BASEDECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           SOURCE_REPOSITORY: ${{ steps.release.outputs.source_repository }}
           SOURCE_COMMIT_SHA: ${{ steps.source.outputs.commit_sha }}
