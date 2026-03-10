@@ -101,7 +101,7 @@ jobs:
       - name: Install root dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build Electrobun app for macOS (stable)
+      - name: Build and finalize macOS release artifacts
         env:
           BASEDECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
