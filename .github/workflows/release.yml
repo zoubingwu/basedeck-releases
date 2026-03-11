@@ -58,6 +58,20 @@ jobs:
 
           VERSION="${VERSION#v}"
           RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download"
+          RAW_ARCH="$(uname -m)"
+          case "${RAW_ARCH}" in
+            arm64|aarch64)
+              PLATFORM_ARCH="arm64"
+              ;;
+            x86_64|amd64)
+              PLATFORM_ARCH="x64"
+              ;;
+            *)
+              echo "unsupported macOS architecture: ${RAW_ARCH}"
+              exit 1
+              ;;
+          esac
+          PLATFORM_PREFIX="stable-macos-${PLATFORM_ARCH}"
           PREVIOUS_TAG="$(
             gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
               jq -r --arg current_tag "${TAG}" '
@@ -67,9 +81,30 @@ jobs:
                 | .[0] // ""
               '
           )"
-          PREVIOUS_RELEASE_BASE_URL=""
+          PREVIOUS_RELEASE_UPDATE_URL=""
+          PREVIOUS_RELEASE_TARBALL_URL=""
           if [ -n "${PREVIOUS_TAG}" ]; then
-            PREVIOUS_RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PREVIOUS_TAG}"
+            PREVIOUS_ASSETS="$(
+              gh release view "${PREVIOUS_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json assets
+            )"
+            PREVIOUS_RELEASE_UPDATE_URL="$(
+              printf '%s' "${PREVIOUS_ASSETS}" |
+                jq -r --arg platform_prefix "${PLATFORM_PREFIX}" '
+                  .assets
+                  | map(select(.name == ($platform_prefix + "-update.json")))
+                  | .[0].url // ""
+                '
+            )"
+            PREVIOUS_RELEASE_TARBALL_URL="$(
+              printf '%s' "${PREVIOUS_ASSETS}" |
+                jq -r --arg platform_prefix "${PLATFORM_PREFIX}" '
+                  .assets
+                  | map(select(.name | test("^" + $platform_prefix + "-.*\\.app\\.tar\\.zst$")))
+                  | .[0].url // ""
+                '
+            )"
           fi
 
           echo "ref=${REF}" >> $GITHUB_OUTPUT
@@ -79,7 +114,8 @@ jobs:
           echo "source_repository=${SOURCE_REPOSITORY}" >> $GITHUB_OUTPUT
           echo "release_base_url=${RELEASE_BASE_URL}" >> $GITHUB_OUTPUT
           echo "previous_tag=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
-          echo "previous_release_base_url=${PREVIOUS_RELEASE_BASE_URL}" >> $GITHUB_OUTPUT
+          echo "previous_release_update_url=${PREVIOUS_RELEASE_UPDATE_URL}" >> $GITHUB_OUTPUT
+          echo "previous_release_tarball_url=${PREVIOUS_RELEASE_TARBALL_URL}" >> $GITHUB_OUTPUT
 
       - name: Checkout source repo
         uses: actions/checkout@v6
@@ -121,15 +157,16 @@ jobs:
       - name: Build and finalize macOS release artifacts
         env:
           BASEDECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
-          BASEDECK_PREVIOUS_RELEASE_BASE_URL: ${{ steps.release.outputs.previous_release_base_url }}
+          BASEDECK_PREVIOUS_RELEASE_UPDATE_URL: ${{ steps.release.outputs.previous_release_update_url }}
+          BASEDECK_PREVIOUS_RELEASE_TARBALL_URL: ${{ steps.release.outputs.previous_release_tarball_url }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           SOURCE_REPOSITORY: ${{ steps.release.outputs.source_repository }}
           SOURCE_COMMIT_SHA: ${{ steps.source.outputs.commit_sha }}
         shell: bash
         run: |
           echo "Building ${RELEASE_TAG} from ${SOURCE_REPOSITORY}@${SOURCE_COMMIT_SHA}"
-          if [ -n "${BASEDECK_PREVIOUS_RELEASE_BASE_URL}" ]; then
-            echo "Using previous public release ${BASEDECK_PREVIOUS_RELEASE_BASE_URL} for delta patch generation"
+          if [ -n "${BASEDECK_PREVIOUS_RELEASE_UPDATE_URL}" ] && [ -n "${BASEDECK_PREVIOUS_RELEASE_TARBALL_URL}" ]; then
+            echo "Using previous public release ${BASEDECK_PREVIOUS_RELEASE_UPDATE_URL} for delta patch generation"
           else
             echo "No previous public release found; publishing full update only"
           fi
