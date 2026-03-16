@@ -224,3 +224,14 @@ jobs:
             artifacts/* \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
+
+      - name: Sync release metadata to website
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          RELEASE_FILE="$(mktemp)"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${{ steps.release.outputs.tag }}" > "${RELEASE_FILE}"
+
+          node scripts/sync-release-metadata.mjs "${RELEASE_FILE}"
