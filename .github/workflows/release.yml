@@ -154,7 +154,7 @@ jobs:
       - name: Install root dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build and finalize macOS release artifacts
+      - name: Build macOS public release artifacts
         env:
           BASEDECK_RELEASE_BASE_URL: ${{ steps.release.outputs.release_base_url }}
           BASEDECK_PREVIOUS_RELEASE_UPDATE_URL: ${{ steps.release.outputs.previous_release_update_url }}
@@ -170,7 +170,7 @@ jobs:
           else
             echo "No previous public release found; publishing full update only"
           fi
-          bun run build:mac:stable
+          bun run build:mac:release
 
       - name: Verify generated artifacts
         shell: bash
