@@ -102,6 +102,14 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Restore Bun dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+
       - name: Print toolchain versions
         shell: bash
         run: |
@@ -180,6 +188,14 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+
+      - name: Restore Bun dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
 
       - name: Print toolchain versions
         shell: pwsh
@@ -282,6 +298,20 @@ jobs:
         with:
           path: release-repo
 
+      - name: Checkout source repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.metadata.outputs.source_repository }}
+          token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
+          ref: ${{ needs.metadata.outputs.ref }}
+          fetch-depth: 1
+          path: source-repo
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
       - name: Verify combined artifacts
         shell: bash
         run: |
@@ -344,4 +374,4 @@ jobs:
 
           gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${{ needs.metadata.outputs.tag }}" > "${RELEASE_FILE}"
 
-          node release-repo/scripts/sync-release-metadata.mjs "${RELEASE_FILE}"
+          node source-repo/scripts/sync-release-metadata.mjs "${RELEASE_FILE}"
