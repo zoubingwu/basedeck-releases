@@ -241,11 +241,11 @@ jobs:
           Write-Host "Generated Windows artifacts:"
           Get-ChildItem artifacts | Format-Table Name, Length
 
-          $publicArchive = Get-ChildItem artifacts -File | Where-Object {
-            $_.Name -like "BaseDeck-$env:RELEASE_VERSION-windows-*.zip"
+          $publicInstaller = Get-ChildItem artifacts -File | Where-Object {
+            $_.Name -like "BaseDeck-$env:RELEASE_VERSION-windows-*.exe"
           } | Select-Object -First 1
-          if (-not $publicArchive) {
-            Write-Host "public Windows archive is missing"
+          if (-not $publicInstaller) {
+            Write-Host "public Windows installer is missing"
             exit 1
           }
 
