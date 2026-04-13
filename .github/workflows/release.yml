@@ -144,7 +144,7 @@ jobs:
           ls -la artifacts
 
       - name: Upload macOS workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-release-artifacts
           path: artifacts/*
@@ -249,7 +249,7 @@ jobs:
           }
 
       - name: Upload Windows workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-release-artifacts
           path: artifacts/*
@@ -266,13 +266,13 @@ jobs:
       contents: write
     steps:
       - name: Download macOS workflow artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: macos-release-artifacts
           path: artifacts
 
       - name: Download Windows workflow artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: windows-release-artifacts
           path: artifacts
