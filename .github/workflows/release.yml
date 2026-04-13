@@ -123,7 +123,7 @@ jobs:
 
       - name: Install root dependencies
         shell: bash
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Build macOS public release artifacts
         env:
@@ -209,7 +209,7 @@ jobs:
 
       - name: Install root dependencies
         shell: pwsh
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Build Windows public release artifacts
         env:
