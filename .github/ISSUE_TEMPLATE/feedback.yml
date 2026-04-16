@@ -1,0 +1,59 @@
+name: Feedback
+description: Share bugs, feature requests, and general feedback.
+title: "[Feedback] "
+labels:
+  - feedback
+body:
+  - type: dropdown
+    id: feedback_type
+    attributes:
+      label: Feedback type
+      description: Pick the category that best matches your submission.
+      options:
+        - Bug
+        - Feature request
+        - General feedback
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: "For example: 1.2.3"
+    validations:
+      required: true
+  - type: input
+    id: build_channel
+    attributes:
+      label: Build channel
+      description: "For example: stable, beta, or nightly"
+    validations:
+      required: true
+  - type: input
+    id: os_info
+    attributes:
+      label: OS info
+      description: "For example: macOS 15.4 arm64"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Describe what happened or what you want us to build.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_outcome
+    attributes:
+      label: Expected outcome
+      description: Describe the desired result.
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: "Optional: list concrete steps to reproduce the issue."
+    validations:
+      required: false
