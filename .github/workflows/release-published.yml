@@ -1,0 +1,36 @@
+name: Sync published release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: source
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+          match = re.search(r'Source commit: ([0-9a-f]{40})', event['release']['body'] or '')
+          ref = match.group(1) if match else event['release']['tag_name']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('ref=' + ref + '\n')
+          PY
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ vars.BASEDECK_SOURCE_REPOSITORY || 'zoubingwu/basedeck' }}
+          token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
+          ref: ${{ steps.source.outputs.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > release.json
+          node scripts/sync-release-metadata.mjs release.json

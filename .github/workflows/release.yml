@@ -2,377 +2,103 @@ name: Release
 
 on:
   repository_dispatch:
-    types:
-      - basedeck-release
+    types: [basedeck-release]
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref or commit SHA to build"
+        description: Private source ref or commit SHA
         required: true
       tag:
-        description: "Release tag to publish (e.g., v0.9.1)"
+        description: Release tag (v0.34.0)
         required: true
       source_repository:
-        description: "Private source repository (owner/name)"
+        description: Private source repository
         required: false
-
-env:
-  DEFAULT_SOURCE_REPOSITORY: zoubingwu/basedeck
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   metadata:
-    name: Resolve release metadata
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       ref: ${{ steps.release.outputs.ref }}
       tag: ${{ steps.release.outputs.tag }}
-      version: ${{ steps.release.outputs.version }}
-      commit_sha: ${{ steps.release.outputs.commit_sha }}
       source_repository: ${{ steps.release.outputs.source_repository }}
-      release_base_url: ${{ steps.release.outputs.release_base_url }}
     steps:
-      - name: Resolve release metadata
-        id: release
+      - id: release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+          SOURCE_REF: ${{ github.event.client_payload.ref || inputs.ref }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+          SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository || inputs.source_repository || vars.BASEDECK_SOURCE_REPOSITORY || 'zoubingwu/basedeck' }}
+          GH_TOKEN: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            REF="${{ github.event.client_payload.ref }}"
-            TAG="${{ github.event.client_payload.tag }}"
-            VERSION="${{ github.event.client_payload.version }}"
-            COMMIT_SHA="${{ github.event.client_payload.commit_sha }}"
-            SOURCE_REPOSITORY="${{ github.event.client_payload.source_repository }}"
-          else
-            REF="${{ github.event.inputs.ref }}"
-            TAG="${{ github.event.inputs.tag }}"
-            VERSION="${TAG#v}"
-            COMMIT_SHA="${REF}"
-            SOURCE_REPOSITORY="${{ github.event.inputs.source_repository }}"
-          fi
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          ENCODED_REF="$(jq -rn --arg ref "$SOURCE_REF" '$ref | @uri')"
+          SOURCE_SHA="$(gh api "/repos/$SOURCE_REPOSITORY/commits/$ENCODED_REF" --jq .sha)"
+          echo "ref=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
 
-          if [ -z "${SOURCE_REPOSITORY}" ]; then
-            SOURCE_REPOSITORY="${{ vars.BASEDECK_SOURCE_REPOSITORY || env.DEFAULT_SOURCE_REPOSITORY }}"
-          fi
-
-          if [ -z "${SOURCE_REPOSITORY}" ]; then
-            echo "BASEDECK_SOURCE_REPOSITORY is empty"
-            exit 1
-          fi
-
-          VERSION="${VERSION#v}"
-          RELEASE_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download"
-          echo "ref=${REF}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
-          echo "source_repository=${SOURCE_REPOSITORY}" >> $GITHUB_OUTPUT
-          echo "release_base_url=${RELEASE_BASE_URL}" >> $GITHUB_OUTPUT
-
-  build-macos:
-    name: Build macOS release
-    runs-on: macos-latest
+  build:
     needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-latest, target: darwin/arm64, artifact: macos-arm64}
+          - {os: macos-latest, target: darwin/amd64, artifact: macos-x64}
+          - {os: windows-latest, target: windows/amd64, artifact: windows-x64}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
-      - name: Checkout source repo
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           repository: ${{ needs.metadata.outputs.source_repository }}
           token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
           ref: ${{ needs.metadata.outputs.ref }}
-          fetch-depth: 0
-
-      - name: Resolve checked out commit
-        id: source
-        shell: bash
-        run: |
-          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v6
         with:
-          bun-version: "1.3.10"
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-
-      - name: Restore Bun dependencies cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
-
-      - name: Print toolchain versions
-        shell: bash
-        run: |
-          echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
-          sw_vers
-          xcodebuild -version
-          clang --version | head -n 1
-          node -v
-          bun --version
-
-      - name: Install root dependencies
-        shell: bash
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Build macOS public release artifacts
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go run ./cmd/smoke
+      - run: go run ./cmd/smoke-cloud
+      - run: go run ./cmd/smoke-credentials
         env:
-          BASEDECK_RELEASE_BASE_URL: ${{ needs.metadata.outputs.release_base_url }}
+          BASEDECK_VERIFY_SYSTEM_KEYCHAIN: '1'
+      - name: Build signed native and legacy-compatible updates
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          SOURCE_REPOSITORY: ${{ needs.metadata.outputs.source_repository }}
-          SOURCE_COMMIT_SHA: ${{ steps.source.outputs.commit_sha }}
-        shell: bash
-        run: |
-          echo "Building ${RELEASE_TAG} from ${SOURCE_REPOSITORY}@${SOURCE_COMMIT_SHA}"
-          bun run build:mac:release
-
-      - name: Verify generated artifacts
-        shell: bash
-        run: |
-          if [ ! -d artifacts ]; then
-            echo "artifacts directory is missing"
-            exit 1
-          fi
-
-          if [ -z "$(find artifacts -maxdepth 1 -type f)" ]; then
-            echo "no release artifacts found in artifacts/"
-            exit 1
-          fi
-
-          echo "Generated macOS artifacts:"
-          ls -la artifacts
-
-      - name: Upload macOS workflow artifacts
-        uses: actions/upload-artifact@v6
+        run: go run ./cmd/package-release -platform ${{ matrix.target }}
+      - run: go run ./cmd/verify-release -platform ${{ matrix.target }}
+      - uses: actions/upload-artifact@v6
         with:
-          name: macos-release-artifacts
+          name: ${{ matrix.artifact }}
           path: artifacts/*
           if-no-files-found: error
 
-  build-windows:
-    name: Build Windows release
-    runs-on: windows-latest
-    needs: metadata
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout source repo
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ needs.metadata.outputs.source_repository }}
-          token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
-          ref: ${{ needs.metadata.outputs.ref }}
-          fetch-depth: 0
-
-      - name: Resolve checked out commit
-        id: source
-        shell: pwsh
-        run: |
-          "commit_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.10"
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-
-      - name: Restore Bun dependencies cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
-
-      - name: Print toolchain versions
-        shell: pwsh
-        run: |
-          Write-Host "Runner: $env:RUNNER_OS / $env:RUNNER_ARCH"
-          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
-          Get-Command cl -ErrorAction SilentlyContinue | Select-Object Source
-          node -v
-          bun --version
-
-      - name: Install root dependencies
-        shell: pwsh
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Build Windows public release artifacts
-        env:
-          BASEDECK_RELEASE_BASE_URL: ${{ needs.metadata.outputs.release_base_url }}
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          SOURCE_REPOSITORY: ${{ needs.metadata.outputs.source_repository }}
-          SOURCE_COMMIT_SHA: ${{ steps.source.outputs.commit_sha }}
-        shell: pwsh
-        run: |
-          Write-Host "Building $env:RELEASE_TAG from $env:SOURCE_REPOSITORY@$env:SOURCE_COMMIT_SHA"
-          bun run build:win:release
-
-      - name: Verify generated artifacts
-        shell: pwsh
-        env:
-          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
-        run: |
-          if (-not (Test-Path artifacts)) {
-            Write-Host "artifacts directory is missing"
-            exit 1
-          }
-
-          $files = Get-ChildItem artifacts -File
-          if (-not $files) {
-            Write-Host "no release artifacts found in artifacts/"
-            exit 1
-          }
-
-          Write-Host "Generated Windows artifacts:"
-          Get-ChildItem artifacts | Format-Table Name, Length
-
-          $publicInstaller = Get-ChildItem artifacts -File | Where-Object {
-            $_.Name -like "BaseDeck-$env:RELEASE_VERSION-windows-*.exe"
-          } | Select-Object -First 1
-          if (-not $publicInstaller) {
-            Write-Host "public Windows installer is missing"
-            exit 1
-          }
-
-          $manifest = Get-ChildItem artifacts -File | Where-Object {
-            $_.Name -like "stable-win-*-update.json"
-          } | Select-Object -First 1
-          if (-not $manifest) {
-            Write-Host "stable Windows update manifest is missing"
-            exit 1
-          }
-
-          $tarball = Get-ChildItem artifacts -File | Where-Object {
-            $_.Name -like "stable-win-*.tar.zst"
-          } | Select-Object -First 1
-          if (-not $tarball) {
-            Write-Host "stable Windows update tarball is missing"
-            exit 1
-          }
-
-      - name: Upload Windows workflow artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: windows-release-artifacts
-          path: artifacts/*
-          if-no-files-found: error
-
-  publish:
-    name: Publish release assets
+  draft:
+    needs: [metadata, build]
     runs-on: ubuntu-latest
-    needs:
-      - metadata
-      - build-macos
-      - build-windows
     permissions:
       contents: write
     steps:
-      - name: Download macOS workflow artifacts
-        uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
-          name: macos-release-artifacts
           path: artifacts
-
-      - name: Download Windows workflow artifacts
-        uses: actions/download-artifact@v5
-        with:
-          name: windows-release-artifacts
-          path: artifacts
-
-      - name: Checkout release repo
-        uses: actions/checkout@v6
-        with:
-          path: release-repo
-
-      - name: Checkout source repo
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ needs.metadata.outputs.source_repository }}
-          token: ${{ secrets.BASEDECK_SOURCE_REPO_TOKEN }}
-          ref: ${{ needs.metadata.outputs.ref }}
-          fetch-depth: 1
-          path: source-repo
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-
-      - name: Verify combined artifacts
-        shell: bash
-        run: |
-          if [ ! -d artifacts ]; then
-            echo "artifacts directory is missing"
-            exit 1
-          fi
-
-          if [ -z "$(find artifacts -maxdepth 1 -type f)" ]; then
-            echo "no release artifacts found in artifacts/"
-            exit 1
-          fi
-
-          echo "Combined artifacts:"
-          ls -la artifacts
-
-      - name: Ensure GitHub Release Exists
+          merge-multiple: true
+      - name: Regenerate combined checksums
+        working-directory: artifacts
+        run: find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS
+      - name: Create draft release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_REF: ${{ needs.metadata.outputs.ref }}
         run: |
-          TAG="${{ needs.metadata.outputs.tag }}"
-          COMMIT_SHA="${{ needs.metadata.outputs.commit_sha }}"
-          SOURCE_REPOSITORY="${{ needs.metadata.outputs.source_repository }}"
-          TARGET_REPOSITORY="${GITHUB_REPOSITORY}"
-
-          if gh release view "${TAG}" --repo "${TARGET_REPOSITORY}" >/dev/null 2>&1; then
-            exit 0
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == true ]] || exit 1
+          else
+            printf 'Native database browser with table structure, data previews and read-only MCP. Built-in AI chat and SQL workbench have been removed.\n\nExisting installations can update through their normal updater. Connections, encrypted credentials and license activations are preserved; a configuration backup is created before the first write. See the repository README for migration and rollback details.\n\nSource commit: %s\n' "$SOURCE_REF" > release-notes.md
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --title "BaseDeck $RELEASE_TAG" --notes-file release-notes.md
           fi
-
-          BODY_FILE="$(mktemp)"
-          cat <<EOF > "${BODY_FILE}"
-          Release artifacts for ${TAG}
-
-          Source repository: ${SOURCE_REPOSITORY}
-          Source commit: ${COMMIT_SHA}
-          EOF
-
-          gh release create "${TAG}" \
-            --repo "${TARGET_REPOSITORY}" \
-            --title "Release ${TAG}" \
-            --notes-file "${BODY_FILE}"
-
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          gh release upload "${{ needs.metadata.outputs.tag }}" \
-            artifacts/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --clobber
-
-      - name: Sync release metadata to website
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          RELEASE_FILE="$(mktemp)"
-
-          gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${{ needs.metadata.outputs.tag }}" > "${RELEASE_FILE}"
-
-          node source-repo/scripts/sync-release-metadata.mjs "${RELEASE_FILE}"
+          gh release upload "$RELEASE_TAG" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
